@@ -19,38 +19,47 @@
 
 package com.microsoft.azure.cosmos.cassandra;
 
-import com.datastax.driver.core.Cluster;
-import com.datastax.driver.core.ConsistencyLevel;
-import com.datastax.driver.core.Statement;
-import com.datastax.driver.core.WriteType;
-import com.datastax.driver.core.exceptions.DriverException;
-import com.datastax.driver.core.exceptions.OverloadedException;
-import com.datastax.driver.core.exceptions.WriteFailureException;
-import com.datastax.driver.core.policies.RetryPolicy;
+import com.datastax.oss.driver.api.core.ConsistencyLevel;
+import com.datastax.oss.driver.api.core.context.DriverContext;
+import com.datastax.oss.driver.api.core.servererrors.WriteType;
+import com.datastax.oss.driver.api.core.session.Request;
+import com.typesafe.config.Config;
+import com.typesafe.config.ConfigFactory;
+import com.datastax.oss.driver.api.core.servererrors.CoordinatorException;
+import com.datastax.oss.driver.api.core.servererrors.OverloadedException;
+import com.datastax.oss.driver.api.core.servererrors.WriteFailureException;
+import com.datastax.oss.driver.api.core.retry.RetryDecision;
+import com.datastax.oss.driver.api.core.retry.RetryPolicy;
 
 import java.util.Random;
 
 /**
- * Implements a Cassandra {@link RetryPolicy} with back-offs for {@link OverloadedException} failures
- * <p> {@link #maxRetryCount} specifies the number of retries that should be attempted. A value of -1 specifies that an
- * indefinite number of retries should be attempted. For {@link #onReadTimeout}, {@link #onWriteTimeout}, and {@link #onUnavailable}, we retry
- * immediately. For onRequestErrors such as OverLoadedError, we try to parse the exception message and use RetryAfterMs
- * field provided from the server as the back-off duration. If RetryAfterMs is not available, we default to exponential
- * growing back-off scheme. In this case the time between retries is increased by {@link #growingBackOffTimeMillis}
- * milliseconds (default: 1000 ms) on each retry, unless maxRetryCount is -1, in which case we back-off with fixed
+ * Implements a Cassandra {@link RetryPolicy} with back-offs for
+ * {@link OverloadedException} failures
+ * <p>
+ * {@link #maxRetryCount} specifies the number of retries that should be
+ * attempted. A value of -1 specifies that an indefinite number of retries
+ * should be attempted. For {@link #onReadTimeout}, {@link #onWriteTimeout}, and
+ * {@link #onUnavailable}, we retry immediately. For onRequestErrors such as
+ * OverLoadedError, we try to parse the exception message and use RetryAfterMs
+ * field provided from the server as the back-off duration. If RetryAfterMs is
+ * not available, we default to exponential growing back-off scheme. In this
+ * case the time between retries is increased by
+ * {@link #growingBackOffTimeMillis} milliseconds (default: 1000 ms) on each
+ * retry, unless maxRetryCount is -1, in which case we back-off with fixed
  * {@link #fixedBackOffTimeMillis} duration.
  * </p>
  */
-public final class CosmosRetryPolicy implements RetryPolicy {
+public final class CosmosRetryPolicy implements RetryPolicy {   
 
-    public CosmosRetryPolicy(int maxRetryCount) {
-        this(maxRetryCount, 5000, 1000);
-    }
+    public CosmosRetryPolicy(DriverContext context, String profileName) {
+        Config root = ConfigFactory.load();
 
-    public CosmosRetryPolicy(int maxRetryCount, int fixedBackOffTimeMillis, int growingBackOffTimeMillis) {
-        this.maxRetryCount = maxRetryCount;
-        this.fixedBackOffTimeMillis = fixedBackOffTimeMillis;
-        this.growingBackOffTimeMillis = growingBackOffTimeMillis;
+        // The driver's built-in defaults, under the default prefix in reference.conf:
+        Config reference = root.getConfig("datastax-java-driver");
+        this.maxRetryCount = Integer.parseInt(reference.getString("profiles.cosmos-policies.cosmos.retry-policy.maxRetryCount"));
+        this.fixedBackOffTimeMillis = Integer.parseInt(reference.getString("profiles.cosmos-policies.cosmos.retry-policy.fixedBackOffTimeMillis"));
+        this.growingBackOffTimeMillis = Integer.parseInt(reference.getString("profiles.cosmos-policies.cosmos.retry-policy.growingBackOffTimeMillis"));
     }
 
     public int getMaxRetryCount() {
@@ -62,100 +71,86 @@ public final class CosmosRetryPolicy implements RetryPolicy {
     }
 
     @Override
-    public void init(Cluster cluster) {
-    }
-
-    @Override
-    public RetryDecision onReadTimeout(
-            Statement statement,
-            ConsistencyLevel consistencyLevel,
-            int requiredResponses,
-            int receivedResponses,
-            boolean dataRetrieved,
-            int retryNumber) {
+    public RetryDecision onReadTimeout(Request request, ConsistencyLevel consistencyLevel, int requiredResponses,
+            int receivedResponses, boolean dataRetrieved, int retryNumber) {
         return retryManyTimesOrThrow(retryNumber);
     }
 
     @Override
-    public RetryDecision onRequestError(
-            Statement statement,
-            ConsistencyLevel consistencyLevel,
-            DriverException driverException,
-            int retryNumber) {
+    public RetryDecision onErrorResponse(Request request, CoordinatorException error, int retryNumber) {
         RetryDecision retryDecision;
 
         try {
-            if (driverException instanceof OverloadedException || driverException instanceof WriteFailureException) {
+            if (error instanceof OverloadedException || error instanceof WriteFailureException) {
                 if (this.maxRetryCount == -1 || retryNumber < this.maxRetryCount) {
-                    int retryMillis = getRetryAfterMs(driverException.toString());
-                    if (retryMillis == -1) {
-                        retryMillis = (this.maxRetryCount == -1)
-                                ? this.fixedBackOffTimeMillis
-                                : this.growingBackOffTimeMillis * retryNumber + random.nextInt(growingBackOffSaltMillis);
-                    }
-
+                    int retryMillis;                                  
+                    retryMillis = (this.maxRetryCount == -1) ? this.fixedBackOffTimeMillis
+                                : this.growingBackOffTimeMillis * retryNumber
+                                        + random.nextInt(growingBackOffSaltMillis);
                     Thread.sleep(retryMillis);
-                    retryDecision = RetryDecision.retry(null);
+                    retryDecision = RetryDecision.RETRY_SAME;
                 } else {
-                    retryDecision = RetryDecision.rethrow();
+                    retryDecision = RetryDecision.RETHROW;
                 }
             } else {
-                retryDecision = RetryDecision.rethrow();
+                retryDecision = RetryDecision.RETHROW;
             }
         } catch (InterruptedException exception) {
-            retryDecision = RetryDecision.rethrow();
+            retryDecision = RetryDecision.RETHROW;
         }
 
         return retryDecision;
     }
 
     @Override
-    public RetryDecision onUnavailable(
-            Statement statement,
-            ConsistencyLevel consistencyLevel,
-            int requiredReplica,
-            int aliveReplica,
-            int retryNumber) {
+    public RetryDecision onUnavailable(Request request, ConsistencyLevel consistencyLevel, int requiredReplica,
+            int aliveReplica, int retryNumber) {
         return retryManyTimesOrThrow(retryNumber);
     }
 
     @Override
-    public RetryDecision onWriteTimeout(
-            Statement statement,
-            ConsistencyLevel consistencyLevel,
-            WriteType writeType,
-            int requiredAcks,
-            int receivedAcks,
-            int retryNumber) {
+    public RetryDecision onWriteTimeout(Request request, ConsistencyLevel consistencyLevel, WriteType writeType,
+            int requiredAcks, int receivedAcks, int retryNumber) {
         return retryManyTimesOrThrow(retryNumber);
     }
 
     private final static Random random = new Random();
     private final int growingBackOffSaltMillis = 2000;
-    private final int fixedBackOffTimeMillis;
-    private final int growingBackOffTimeMillis;
-    private final int maxRetryCount;
+    private int fixedBackOffTimeMillis = 1000;
+    private int growingBackOffTimeMillis = 100;
+    private int maxRetryCount = 10;
 
     private RetryDecision retryManyTimesOrThrow(int retryNumber) {
-        return (this.maxRetryCount == -1 || retryNumber < this.maxRetryCount)
-                ? RetryDecision.retry(null)
-                : RetryDecision.rethrow();
+        return (this.maxRetryCount == -1 || retryNumber < this.maxRetryCount) ? RetryDecision.RETRY_NEXT
+                : RetryDecision.RETHROW;
     }
 
-    // Example exceptionString:
-    // "com.datastax.driver.core.exceptions.OverloadedException: Queried host (babatsai.cassandra.cosmos.azure.com/40.65.106.154:10350)
-    // was overloaded: Request rate is large: ActivityID=98f98762-512e-442d-b5ef-36f5d03d788f, RetryAfterMs=10, Additional details='
-    private static int getRetryAfterMs(String exceptionString){
+    // RetryAfterMs server property is no longer present in OverloadedException from Datastax driver v4.x  
+    // Leaving the parsing method here for posterity. Example exceptionString in prior versions was:
+    // "com.datastax.driver.core.exceptions.OverloadedException: Queried host
+    // (babatsai.cassandra.cosmos.azure.com/40.65.106.154:10350)
+    // was overloaded: Request rate is large:
+    // ActivityID=98f98762-512e-442d-b5ef-36f5d03d788f, RetryAfterMs=10, Additional
+    // details='
+    private static int getRetryAfterMs(String exceptionString) {
         String[] tokens = exceptionString.toString().split(",");
-        for (String token: tokens) {
+        for (String token : tokens) {
             String[] kvp = token.split("=");
-            if (kvp.length != 2) continue;
+            if (kvp.length != 2)
+                continue;
             if (kvp[0].trim().equals("RetryAfterMs")) {
                 String value = kvp[1];
                 return Integer.parseInt(value);
             }
         }
-
         return -1;
     }
+
+
+    @Override
+    public RetryDecision onRequestAborted(Request request, Throwable error, int retryCount) {
+        // TODO Auto-generated method stub
+        return null;
+    }
+
 }

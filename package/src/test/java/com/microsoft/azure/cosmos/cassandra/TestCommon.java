@@ -1,12 +1,23 @@
 package com.microsoft.azure.cosmos.cassandra;
 
-import com.datastax.driver.core.*;
+import com.datastax.oss.driver.api.core.*;
+import com.datastax.oss.driver.api.core.cql.BatchStatement;
+import com.datastax.oss.driver.api.core.cql.BatchType;
+import com.datastax.oss.driver.api.core.cql.BatchStatement;
+import com.datastax.oss.driver.api.core.cql.BatchableStatement;
+import com.datastax.oss.driver.api.core.cql.PreparedStatement;
+import com.datastax.oss.driver.api.core.cql.ResultSet;
+import com.datastax.oss.driver.api.core.cql.Row;
+import com.datastax.oss.driver.api.core.cql.SimpleStatement;
+import com.datastax.oss.driver.api.core.cql.SimpleStatementBuilder;
+import com.datastax.oss.driver.api.core.cql.Statement;
+
 import java.text.SimpleDateFormat;
-import static com.datastax.driver.core.BatchStatement.Type.UNLOGGED;
+import static com.datastax.oss.driver.api.core.cql.BatchStatement.builder;
 
 public class TestCommon {
 
-    static final String[] CONTACT_POINTS;
+    static final String CONTACT_POINT;
     static {
 
         String value = System.getProperty("COSMOS_HOSTNAME");
@@ -19,7 +30,7 @@ public class TestCommon {
             value = "localhost";
         }
 
-        CONTACT_POINTS = new String[] {value};
+        CONTACT_POINT = value;
     }
 
     static final int PORT;
@@ -39,80 +50,58 @@ public class TestCommon {
     }
 
     /**
-     * Creates the schema (keyspace) and table to verify that we can integrate with Cosmos.
+     * Creates the schema (keyspace) and table to verify that we can integrate with
+     * Cosmos.
      */
-    static void createSchema(Session session, String keyspaceName, String tableName) throws InterruptedException {
-        session.execute(String.format(
-                "CREATE KEYSPACE IF NOT EXISTS %s WITH replication "
-                        + "= {'class':'SimpleStrategy', 'replication_factor':3}", keyspaceName));
+    static void createSchema(CqlSession session, String keyspaceName, String tableName) throws InterruptedException {
+        session.execute(String.format("CREATE KEYSPACE IF NOT EXISTS %s WITH replication "
+                + "= {'class':'SimpleStrategy', 'replication_factor':3}", keyspaceName));
 
         Thread.sleep(5000);
 
-        session.execute(String.format(
-                "CREATE TABLE IF NOT EXISTS %s.%s ("
-                        + "sensor_id uuid,"
-                        + "date date,"
-                        + // emulates bucketing by day
-                        "timestamp timestamp,"
-                        + "value double,"
-                        + "PRIMARY KEY ((sensor_id,date),timestamp)"
-                        + ")", keyspaceName, tableName));
+        session.execute(String.format("CREATE TABLE IF NOT EXISTS %s.%s (" + "sensor_id uuid," + "date date," + // emulates
+                                                                                                                // bucketing
+                                                                                                                // by
+                                                                                                                // day
+                "timestamp timestamp," + "value double," + "PRIMARY KEY ((sensor_id,date),timestamp)" + ")",
+                keyspaceName, tableName));
 
         Thread.sleep(5000);
     }
 
-    static void write(Session session, String keyspaceName, String tableName) {
+    static void write(CqlSession session, String keyspaceName, String tableName) {
         write(session, ConsistencyLevel.ONE, keyspaceName, tableName);
     }
 
-        /**
-         * Inserts data, retrying if necessary with a downgraded CL.
-         *
-         * @param consistencyLevel the consistency level to apply.
-         */
-    static void write(Session session, ConsistencyLevel consistencyLevel, String keyspaceName, String tableName) {
+    /**
+     * Inserts data, retrying if necessary with a downgraded CL.
+     *
+     * @param consistencyLevel the consistency level to apply.
+     */
+    static void write(CqlSession session, ConsistencyLevel consistencyLevel, String keyspaceName, String tableName) {
 
         System.out.printf("Writing at %s%n", consistencyLevel);
 
-        BatchStatement batch = new BatchStatement(UNLOGGED);
-
-        batch.add(
-                new SimpleStatement(String.format(
-                        "INSERT INTO %s.%s "
+        SimpleStatement simpleInsertBalance =
+        SimpleStatement.newInstance(
+        "INSERT INTO %s.%s "
                                 + "(sensor_id, date, timestamp, value) "
                                 + "VALUES ("
                                 + "756716f7-2e54-4715-9f00-91dcbea6cf50,"
                                 + "'2018-02-26',"
                                 + "'2018-02-26T13:53:46.345+01:00',"
-                                + "2.34)", keyspaceName, tableName)));
+                                + "2.34)");
 
-        batch.add(
-                new SimpleStatement(String.format(
-                        "INSERT INTO %s.%s "
-                                + "(sensor_id, date, timestamp, value) "
-                                + "VALUES ("
-                                + "756716f7-2e54-4715-9f00-91dcbea6cf50,"
-                                + "'2018-02-26',"
-                                + "'2018-02-26T13:54:27.488+01:00',"
-                                + "2.47)", keyspaceName, tableName)));
-
-        batch.add(
-                new SimpleStatement(String.format(
-                        "INSERT INTO %s.%s "
-                                + "(sensor_id, date, timestamp, value) "
-                                + "VALUES ("
-                                + "756716f7-2e54-4715-9f00-91dcbea6cf50,"
-                                + "'2018-02-26',"
-                                + "'2018-02-26T13:56:33.739+01:00',"
-                                + "2.52)", keyspaceName, tableName)));
-
-        batch.setConsistencyLevel(consistencyLevel);
+        BatchStatement batch =
+                    BatchStatement.newInstance(
+                    BatchType.LOGGED,
+                    simpleInsertBalance).setConsistencyLevel(consistencyLevel);
 
         session.execute(batch);
         System.out.println("Write succeeded at " + consistencyLevel);
     }
 
-    static ResultSet read(Session session, String keyspaceName, String tableName) {
+    static ResultSet read(CqlSession session, String keyspaceName, String tableName) {
         return read(session, ConsistencyLevel.ONE, keyspaceName, tableName);
     }
 
@@ -121,19 +110,16 @@ public class TestCommon {
      *
      * @param consistencyLevel the consistency level to apply.
      */
-    static ResultSet read(Session session, ConsistencyLevel consistencyLevel, String keyspaceName, String tableName) {
+    static ResultSet read(CqlSession session, ConsistencyLevel consistencyLevel, String keyspaceName, String tableName) {
 
         System.out.printf("Reading at %s%n", consistencyLevel);
-
-        Statement statement =
-                new SimpleStatement(String.format(
-                        "SELECT sensor_id, date, timestamp, value "
-                                + "FROM %s.%s "
+        String statement = "SELECT sensor_id, date, timestamp, value "
+                                + "FROM "+keyspaceName+"."+tableName+""
                                 + "WHERE "
                                 + "sensor_id = 756716f7-2e54-4715-9f00-91dcbea6cf50 AND "
                                 + "date = '2018-02-26' AND "
-                                + "timestamp > '2018-02-26+01:00'", keyspaceName, tableName))
-                        .setConsistencyLevel(consistencyLevel);
+                                + "timestamp > '2018-02-26+01:00'";
+
 
         ResultSet rows = session.execute(statement);
         System.out.println("Read succeeded at " + consistencyLevel);
@@ -168,9 +154,10 @@ public class TestCommon {
 
             System.out.printf(
                     format,
-                    row.getUUID("sensor_id"),
-                    row.getDate("date"),
-                    sdf.format(row.getTimestamp("timestamp")),
+                    row.getUuid(
+                            "sensor_id"),
+                    row.getLocalDate("date"),
+                    sdf.format(row.getLocalTime("timestamp")),
                     row.getDouble("value"));
         }
     }

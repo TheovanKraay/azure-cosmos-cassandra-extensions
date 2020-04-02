@@ -20,8 +20,7 @@
  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  SOFTWARE.
 -->
-<project xmlns="http://maven.apache.org/POM/4.0.0" 
-  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/maven-v4_0_0.xsd">
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/maven-v4_0_0.xsd">
   <modelVersion>4.0.0</modelVersion>
   <parent>
     <artifactId>azure-cosmos-cassandra-extensions.parent</artifactId>
@@ -33,16 +32,22 @@
   <packaging>jar</packaging>
   <properties>
     <version.assertj-core>3.11.1</version.assertj-core>
-    <version.cassandra-driver-core>3.6.0</version.cassandra-driver-core>
+    <version.cassandra-driver-core>4.5.1</version.cassandra-driver-core>
+    <version.cassandra-driver-query-builder>4.0.0</version.cassandra-driver-query-builder>
     <version.org.apache.commons.io>2.4</version.org.apache.commons.io>
     <version.testng>6.14.3</version.testng>
   </properties>
-  <dependencyManagement/>
+  <dependencyManagement />
   <dependencies>
     <dependency>
-      <artifactId>cassandra-driver-core</artifactId>
-      <groupId>com.datastax.cassandra</groupId>
+      <groupId>com.datastax.oss</groupId>
+      <artifactId>java-driver-core</artifactId>
       <version>${version.cassandra-driver-core}</version>
+    </dependency>
+    <dependency>
+      <groupId>com.datastax.oss</groupId>
+      <artifactId>java-driver-query-builder</artifactId>
+      <version>${version.cassandra-driver-query-builder}</version>
     </dependency>
     <dependency>
       <artifactId>org.apache.commons.io</artifactId>
